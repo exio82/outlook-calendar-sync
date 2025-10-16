@@ -1,5 +1,9 @@
+Sub SyncCalendars()
+    Call SyncCalendarsCustomerToPersonal
+    Call SyncCalendarsPersonalToCustomer
+End Sub
 
-Sub SyncCalendarsCustomerToPrivate()
+Sub SyncCalendarsCustomerToPersonal()
     Call SyncCalendarsParametric( _
         "CHANGEME@Customer", "Calendario", _
         "CHANGEME@Private", "Calendario", _
@@ -10,7 +14,7 @@ Sub SyncCalendarsCustomerToPrivate()
         False)
 End Sub
 
-Sub SyncCalendarsPrivateToCustomer()
+Sub SyncCalendarsPersonalToCustomer()
     Call SyncCalendarsParametric( _
         "CHANGEME@Private", "Calendario", _
         "CHANGEME@Customer", "Calendario", _
@@ -20,6 +24,14 @@ Sub SyncCalendarsPrivateToCustomer()
         True, _
         False)
 End Sub
+
+Function appointmentToString(ByRef appt As Outlook.AppointmentItem) As String
+    If appt Is Nothing Then
+        appointmentToString = "Nothing"
+    Else
+        appointmentToString = appt.Start & "-" & Format(appt.End, "hh:nn:ss") & " " & appt.Subject
+    End If
+End Function
 
 Sub copyAppointmentA2B(ByRef apptA As Outlook.AppointmentItem, ByRef apptB As Outlook.AppointmentItem, entryIdA As String, anonymize As Boolean, categoryToSet As String, prefix As String, dryRun As Boolean)
     ' Popola i campi di B
@@ -32,6 +44,14 @@ Sub copyAppointmentA2B(ByRef apptA As Outlook.AppointmentItem, ByRef apptB As Ou
     Else
         apptB.Subject = prefix & apptA.Subject
         apptB.Body = apptA.Body
+        apptB.RequiredAttendees = apptA.RequiredAttendees
+        apptB.Location = apptA.Location
+        Dim rA, rB As Outlook.Recipient
+        For Each rA In apptA.Recipients
+            Set rB = apptB.Recipients.Add(rA.Address)
+            rB.Type = rA.Type
+        Next rA
+        apptB.Recipients.ResolveAll
     End If
     
     ' Popola i campi di ricorrenza
@@ -62,24 +82,36 @@ Sub copyAppointmentA2B(ByRef apptA As Outlook.AppointmentItem, ByRef apptB As Ou
         'patternB.NoEndDate = patternA.NoEndDate
     End If
     
-    ' Legge il SourceId se mancante
-    If IsEmpty(entryIdA) Then
-        Dim prop As Outlook.UserProperty
-        Set prop = apptA.UserProperties.Find("SourceID")
-        If Not prop Is Nothing Then
-            entryIdA = prop.Value
-        End If
-    End If
-    
     ' Setta il riferimento da B verso A
-    If Not IsEmpty(entryIdA) Then
-        Set prop = apptB.UserProperties.Add("SourceID", olText, True)
-        prop.Value = entryIdA
+    If entryIdA <> "" Then
+        Call setPropertySourceId(apptB, entryIdA)
     End If
     
     ' Salva
     If Not dryRun Then
         apptB.Save
+    End If
+End Sub
+
+Function getPropertySourceId(ByRef appt As Outlook.AppointmentItem) As String
+    If Not appt Is Nothing Then
+        Dim prop As Outlook.UserProperty
+        Set prop = appt.UserProperties.Find("SourceID")
+        If Not prop Is Nothing Then
+            getPropertySourceId = prop.value
+        Else
+            getPropertySourceId = ""
+        End If
+    Else
+        getPropertySourceId = ""
+    End If
+End Function
+
+Sub setPropertySourceId(ByRef appt As Outlook.AppointmentItem, value As String)
+    If Not appt Is Nothing Then
+        Dim prop As Outlook.UserProperty
+        Set prop = appt.UserProperties.Add("SourceID", olText, True)
+        prop.value = value
     End If
 End Sub
 
@@ -93,7 +125,6 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
     Dim itemsA As Outlook.Items
     Dim itemsB As Outlook.Items
     Dim sourceIDs As Collection
-    Dim prop As Outlook.UserProperty
     Dim Item As Object
     Dim found As Boolean
     Dim startDate As Date
@@ -101,6 +132,7 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
     Dim endDate As Date
     Dim endDateCheck As Date
     Dim entryIdA As String
+    Dim entryIdAFromProperty As String
     Dim entryIdB As String
     Dim skipMeeting As Boolean
     Dim countA, countB As Integer: countA = countB = 0
@@ -141,7 +173,7 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
 
     ' Avvia la sincronizzazione
     Debug.Print "Sincronizzazione dal " & startDate & " al " & endDate & " avviata il " & Now
-    Debug.Print "Eventi in A=" & countA & " e in B=" & countB
+    Debug.Print "Numero eventi A=" & accountA & "=" & countA & " --> B=" & accountB & "=" & countB
 
     For Each Item In itemsA
         If TypeOf Item Is Outlook.AppointmentItem Then
@@ -156,36 +188,36 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                 sourceIDs.Add entryIdA
                 Set apptFound = Nothing
                 skipMeeting = False
-                Set prop = apptA.UserProperties.Find("SourceID")
+                entryIdAFromProperty = getPropertySourceId(apptA)
                 
-                ' Salta quelli cancellati
                 If apptA.MeetingStatus = olMeetingReceivedAndCanceled Then
+                    ' Salta quelli cancellati
                     skipMeeting = True
-                    'Debug.Print "Saltato incontro cancellato: " & apptA.Subject & " - " & apptA.Start & " - " & apptA.End
-                ElseIf Not prop Is Nothing Then
+                    ' Debug.Print "Saltato incontro cancellato:  " & appointmentToString(apptA)
+                ElseIf entryIdAFromProperty <> "" Then
+                    ' Salta quelli che hanno la property SourceID, cioè che sono stati creati da una copia precedente
                     skipMeeting = True
-                    'Debug.Print "Saltato incontro già copiato: " & apptA.Subject & " - " & apptA.Start & " - " & apptA.End
+                    'Debug.Print "Saltato incontro già copiato: " & appointmentToString(apptA)
                 ElseIf apptA.AllDayEvent Then
+                    ' Salta quelli a giornata intera perché tipicamente sono appunti o promemoria
                     skipMeeting = True
-                    'Debug.Print "Saltato incontro di giornata intera: " & apptA.Subject & " - " & apptA.Start
+                    'Debug.Print "Saltato incontro giornaliero: " & appointmentToString(apptA)
                 Else
                     ' Cerca se esiste già un placeholder
                     For Each apptB In itemsB
                         If TypeOf apptB Is Outlook.AppointmentItem Then
-                            'If apptB.Subject = prefix & apptA.Subject And apptB.Start = apptA.Start And apptB.End = apptA.End Then
-                            'If InStr(apptB.Body, textToSearch) > 0 Then
                             If apptB.Start >= startDateCheck And apptB.Start <= endDateCheck Then
-                                ' Cerca il match per SourceId
-                                Set prop = apptB.UserProperties.Find("SourceID")
-                                If Not prop Is Nothing Then
-                                    If prop.Value = entryIdA Then
-                                        Set apptFound = apptB
-                                        Exit For
-                                    End If
+                                ' Cerca il match per SourceID
+                                entryIdB = getPropertySourceId(apptB)
+                                If entryIdB = entryIdA Then
+                                    Set apptFound = apptB
+                                    Exit For
                                 End If
-                                ' Cerca se ci sono meeting senza SourceId ma con stesso subject/inizio/fine e in tal caso salta quello corrente perché già gestito a mano
+                                ' Cerca se ci sono meeting senza SourceId ma con stesso subject/inizio/fine
+                                ' e in tal caso salta quello corrente perché già gestito a mano.
+                                ' Così rileva anche gli incontri dove sono invitati entrambi gli account e li salta automaticamente, senza aggiornare il loro stato
                                 If apptA.Subject = apptB.Subject And apptA.Start = apptB.Start And apptA.End = apptB.End Then
-                                    'Debug.Print "Saltato incontro omonimo: " & apptA.Subject & " - " & apptA.Start & " - " & apptA.End
+                                    'Debug.Print "Saltato incontro omonimo:     " & appointmentToString(apptA)
                                     skipMeeting = True
                                     Exit For
                                 End If
@@ -202,19 +234,20 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                     Set apptB = calendarB.Items.Add(olAppointmentItem)
                     Call copyAppointmentA2B(apptA, apptB, entryIdA, anonymize, categoryToSet, prefix, dryRun)
                     If anonymize Then
-                        Debug.Print "Creato placeholder: " & apptB.Subject & " - " & apptB.Start & " - Da: " & apptA.Subject
+                        Debug.Print "Creato placeholder anonimo:   " & appointmentToString(apptB) & " - per: " & apptA.Subject 'apptB.Start & " - " & apptB.Subject & " - Da: " & apptA.Subject
                     Else
-                        Debug.Print "Creato placeholder: " & apptB.Subject & " - " & apptB.Start
+                        Debug.Print "Creato placeholder incontro:  " & appointmentToString(apptB)
                     End If
                     
                 ElseIf apptFound.Start <> apptA.Start Or apptFound.End <> apptA.End Then
-                    ' Aggiorna l'incontro spostato ricreandolo da capo
-                    Set apptB = calendarB.Items.Add(olAppointmentItem)
-                    Call copyAppointmentA2B(apptA, apptB, entryIdA, anonymize, categoryToSet, prefix, dryRun)
+                    ' Aggiorna l'incontro
+                    apptFound.BusyStatus = apptA.BusyStatus
+                    apptFound.Start = apptA.Start
+                    apptFound.End = apptA.End
                     If Not dryRun Then
-                        apptFound.Delete
+                        apptFound.Save
                     End If
-                    Debug.Print "Aggiornato placeholder per: " & apptA.Subject
+                    Debug.Print "Aggiornato placeholder:       " & appointmentToString(apptA)
 
                 Else
                     If apptFound.BusyStatus <> apptA.BusyStatus Then
@@ -223,13 +256,13 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                         If Not dryRun Then
                             apptFound.Save
                         End If
-                        Debug.Print "Aggiornato stato: " & apptA.Subject & " - " & apptA.Start
+                        Debug.Print "Aggiornato stato placeholder: " & appointmentToString(apptA)
                     Else
-                        'Debug.Print "Già presente: " & apptA.Subject & " - " & apptA.Start
+                        'Debug.Print "Saltato incontro già copiato: " & appointmentToString(apptA)
                     End If
                 End If
             Else
-                'Debug.Print "Ignorato (fuori intervallo): " & apptA.Subject & " - " & apptA.Start
+                'Debug.Print "Ignorato (fuori intervallo):  " & appointmentToString(apptA)
             End If
         End If
     Next
@@ -237,23 +270,28 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
     ' Fase 2: rimuovi placeholder orfani
     For Each apptB In calendarB.Items
         If TypeOf apptB Is Outlook.AppointmentItem Then
+            ' Filtra per data (doppio check)
             If apptB.Start >= startDateCheck And apptB.Start <= endDateCheck Then
-                Set prop = apptB.UserProperties.Find("SourceID")
-                If Not prop Is Nothing Then
-                    idValue = prop.Value
-                    On Error Resume Next
+                ' Considera solo gli elementi copiati, cioè con SourceID valorizzato
+                entryIdB = getPropertySourceId(apptB)
+                If entryIdB <> "" Then
                     found = False
                     For Each EntryID In sourceIDs
-                        If EntryID = idValue Then
+                        If EntryID = entryIdB Then
                             found = True
                             Exit For
                         End If
                     Next
-                    On Error GoTo 0
                     If Not found Then
-                        Debug.Print "Eliminato placeholder orfano: " & apptB.Subject
-                        If Not dryRun Then
-                            apptB.Delete
+                        ' Elimina solo i placeholder orfani a partire da startDate
+                        ' perché per quelli più vecchi non si può risolvere il corrispondente incontro di A a causa della non corrispondenza dei filtri per data
+                        ' Con la condizione "apptB.End < endDate" si eliminerebbero i placeholder di incontri successivi alla data fine che potrebbero essere stati creati da altre sincronizzazioni con intervallo di date più ampio, per cui la condizione è omessa.
+                        ' Con la condizione "apptB.Start >= startDate + 1" NON si eliminano i placeholder antecedenti alla data inizio che potrebbero essere stati creati da altre sincronizzazioni con intervallo di date più ampio
+                        If apptB.Start >= startDate + 1 Then
+                            Debug.Print "Eliminato placeholder orfano: " & appointmentToString(apptB)
+                            If Not dryRun Then
+                                apptB.Delete
+                            End If
                         End If
                     End If
                 End If
@@ -262,6 +300,7 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
     Next
 
     Debug.Print "Sincronizzazione completata alle " & Time
+    Debug.Print ""
 End Sub
 
 
