@@ -115,6 +115,14 @@ Sub setPropertySourceId(ByRef appt As Outlook.AppointmentItem, value As String)
     End If
 End Sub
 
+Function getAppointmentHomonymousKey(ByRef appt As Outlook.AppointmentItem) As String
+    If Not appt Is Nothing Then
+        getAppointmentHomonymousKey = appointmentToString(appt) ' appt.Subject & appt.Start & appt.End
+    Else
+        getAppointmentHomonymousKey = ""
+    End If
+End Function
+
 Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As String, folderB As String, startDateOffset As Integer, endDateOffset As Integer, prefix As String, categoryToSet As String, anonymize As Boolean, dryRun As Boolean)
     Dim ns As Outlook.NameSpace
     Dim calendarA As Outlook.Folder
@@ -136,10 +144,15 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
     Dim entryIdB As String
     Dim skipMeeting As Boolean
     Dim countA, countB As Integer: countA = countB = 0
+    Dim mapApptBBySourceID As Object
+    Dim mapApptBBySubjectStartEnd As Object
+    Dim mapKey As String
     
     ' Inizializzazione
     Set sourceIDs = New Collection
     Set ns = Application.GetNamespace("MAPI")
+    Set mapApptBBySourceID = CreateObject("Scripting.Dictionary")
+    Set mapApptBBySubjectStartEnd = CreateObject("Scripting.Dictionary")
 
     ' Intervallo di date da sincronizzare
     startDate = Date + startDateOffset
@@ -174,7 +187,31 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
     ' Avvia la sincronizzazione
     Debug.Print "Sincronizzazione dal " & startDate & " al " & endDate & " avviata il " & Now
     Debug.Print "Numero eventi A=" & accountA & "=" & countA & " --> B=" & accountB & "=" & countB
+    
+    ' Indicizzazione appuntamenti di B per SourceID e per Subject/Start/End
+    ' Con l'indicizzazione si riducono notevolmente i tempi di esecuzione perché gli eventi del calendario B vengono iterati una sola volta
+    For Each apptB In itemsB
+        If TypeOf apptB Is Outlook.AppointmentItem Then
+            If apptB.Start >= startDateCheck And apptB.Start <= endDateCheck Then
+                entryIdB = getPropertySourceId(apptB)
+                If entryIdB <> "" Then
+                    If mapApptBBySourceID.Exists(entryIdB) Then
+                        Debug.Print "ERROR!! Chiave duplicata in mapApptBBySourceID: '" & entryIdB & "' per " & appointmentToString(apptB)
+                    Else
+                        mapApptBBySourceID.Add entryIdB, apptB
+                    End If
+                End If
+                mapKey = getAppointmentHomonymousKey(apptB)
+                If Not mapApptBBySubjectStartEnd.Exists(mapKey) Then
+                    ' In questo caso se c'è colisione di chiave non è un errore
+                    ' perché non interessa risalire all'appuntamento di B ma è sufficiente sapere se esiste almeno un meeting omonimo o meno
+                    mapApptBBySubjectStartEnd.Add mapKey, Nothing
+                End If
+            End If
+        End If
+    Next
 
+    ' Per ogni appuntamento di A
     For Each Item In itemsA
         If TypeOf Item Is Outlook.AppointmentItem Then
             Set apptA = Item
@@ -203,27 +240,16 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                     skipMeeting = True
                     'Debug.Print "Saltato incontro giornaliero: " & appointmentToString(apptA)
                 Else
-                    ' Cerca se esiste già un placeholder
-                    For Each apptB In itemsB
-                        If TypeOf apptB Is Outlook.AppointmentItem Then
-                            If apptB.Start >= startDateCheck And apptB.Start <= endDateCheck Then
-                                ' Cerca il match per SourceID
-                                entryIdB = getPropertySourceId(apptB)
-                                If entryIdB = entryIdA Then
-                                    Set apptFound = apptB
-                                    Exit For
-                                End If
-                                ' Cerca se ci sono meeting senza SourceId ma con stesso subject/inizio/fine
-                                ' e in tal caso salta quello corrente perché già gestito a mano.
-                                ' Così rileva anche gli incontri dove sono invitati entrambi gli account e li salta automaticamente, senza aggiornare il loro stato
-                                If apptA.Subject = apptB.Subject And apptA.Start = apptB.Start And apptA.End = apptB.End Then
-                                    'Debug.Print "Saltato incontro omonimo:     " & appointmentToString(apptA)
-                                    skipMeeting = True
-                                    Exit For
-                                End If
-                            End If
+                    ' Recupera il placeholder corrispondente per chiave
+                    If mapApptBBySourceID.Exists(entryIdA) Then
+                        Set apptFound = mapApptBBySourceID(entryIdA)
+                    Else
+                        mapKey = getAppointmentHomonymousKey(apptA)
+                        If mapApptBBySubjectStartEnd.Exists(mapKey) Then
+                            Set apptFound = mapApptBBySubjectStartEnd(mapKey)
+                            skipMeeting = True
                         End If
-                    Next
+                    End If
                     
                 End If
 
@@ -234,16 +260,19 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                     Set apptB = calendarB.Items.Add(olAppointmentItem)
                     Call copyAppointmentA2B(apptA, apptB, entryIdA, anonymize, categoryToSet, prefix, dryRun)
                     If anonymize Then
-                        Debug.Print "Creato placeholder anonimo:   " & appointmentToString(apptB) & " - per: " & apptA.Subject 'apptB.Start & " - " & apptB.Subject & " - Da: " & apptA.Subject
+                        Debug.Print "Creato placeholder anonimo:   " & appointmentToString(apptB) & " - per: " & apptA.Subject
                     Else
                         Debug.Print "Creato placeholder incontro:  " & appointmentToString(apptB)
                     End If
                     
-                ElseIf apptFound.Start <> apptA.Start Or apptFound.End <> apptA.End Then
+                ElseIf apptFound.Start <> apptA.Start Or apptFound.End <> apptA.End Or (Not anonymize And prefix & apptFound.Subject <> apptA.Subject) Then
                     ' Aggiorna l'incontro
                     apptFound.BusyStatus = apptA.BusyStatus
                     apptFound.Start = apptA.Start
                     apptFound.End = apptA.End
+                    If Not anonymize Then
+                        apptFound.Subject = prefix & apptA.Subject
+                    End If
                     If Not dryRun Then
                         apptFound.Save
                     End If
