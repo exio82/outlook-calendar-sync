@@ -297,7 +297,7 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
     Next
     
     ' Fase 2: rimuovi placeholder orfani
-    For Each apptB In calendarB.Items
+    For Each apptB In itemsB
         If TypeOf apptB Is Outlook.AppointmentItem Then
             ' Filtra per data (doppio check)
             If apptB.Start >= startDateCheck And apptB.Start <= endDateCheck Then
