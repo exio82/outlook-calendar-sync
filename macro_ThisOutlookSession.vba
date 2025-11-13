@@ -37,6 +37,7 @@ Sub copyAppointmentA2B(ByRef apptA As Outlook.AppointmentItem, ByRef apptB As Ou
     ' Popola i campi di B
     apptB.Start = apptA.Start
     apptB.End = apptA.End
+    apptB.MeetingStatus = apptA.MeetingStatus
     apptB.BusyStatus = apptA.BusyStatus
     apptB.Categories = categoryToSet
     If anonymize Then
@@ -153,6 +154,8 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
     Set ns = Application.GetNamespace("MAPI")
     Set mapApptBBySourceID = CreateObject("Scripting.Dictionary")
     Set mapApptBBySubjectStartEnd = CreateObject("Scripting.Dictionary")
+    Set calendarA = ns.Folders(accountA).Folders(folderA)
+    Set calendarB = ns.Folders(accountB).Folders(folderB)
 
     ' Intervallo di date da sincronizzare
     startDate = Date + startDateOffset
@@ -160,10 +163,6 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
     ' I match nel calendario B vengono ricercati solo nell'intervallo check. Per ragioni di performance
     startDateCheck = startDate - 7
     endDateCheck = endDate + 30
-
-    ' Sostituisci con i valori corretti del proprio account e propria configurazione
-    Set calendarA = ns.Folders(accountA).Folders(folderA)
-    Set calendarB = ns.Folders(accountB).Folders(folderB)
 
     ' Filtra i calendari per intervallo di date
     Set itemsA = calendarA.Items
@@ -184,29 +183,33 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
         countB = countB + 1
     Next
 
-    ' Avvia la sincronizzazione
+    ' Logga l'avvio della sincronizzazione
     Debug.Print "Sincronizzazione dal " & startDate & " al " & endDate & " avviata il " & Now
     Debug.Print "Numero eventi A=" & accountA & "=" & countA & " --> B=" & accountB & "=" & countB
     
-    ' Indicizzazione appuntamenti di B per SourceID e per Subject/Start/End
+    ' Indicizzazione appuntamenti di B per SourceID e per chiave di omonimia (Subject/Start/End)
     ' Con l'indicizzazione si riducono notevolmente i tempi di esecuzione perché gli eventi del calendario B vengono iterati una sola volta
     For Each apptB In itemsB
         If TypeOf apptB Is Outlook.AppointmentItem Then
             If apptB.Start >= startDateCheck And apptB.Start <= endDateCheck Then
                 entryIdB = getPropertySourceId(apptB)
                 If entryIdB <> "" Then
+                    ' Indicizza per SourceID tutti gli appuntamenti che hanno il SourceID
                     If mapApptBBySourceID.Exists(entryIdB) Then
                         Debug.Print "ERROR!! Chiave duplicata in mapApptBBySourceID: '" & entryIdB & "' per " & appointmentToString(apptB)
                     Else
                         mapApptBBySourceID.Add entryIdB, apptB
                     End If
+                Else
+                    ' La verifica omonimia viene fatta solo verso gli appuntamenti che non hanno il SourceID, cioé che non sono gestiti da questo script
+                    mapKey = getAppointmentHomonymousKey(apptB)
+                    If Not mapApptBBySubjectStartEnd.Exists(mapKey) Then
+                        ' In questo caso se c'è colisione di chiave non è un errore
+                        ' perché non interessa risalire all'appuntamento esatto di B ma è sufficiente sapere se esiste almeno un meeting omonimo
+                        mapApptBBySubjectStartEnd.Add mapKey, Nothing
+                    End If
                 End If
-                mapKey = getAppointmentHomonymousKey(apptB)
-                If Not mapApptBBySubjectStartEnd.Exists(mapKey) Then
-                    ' In questo caso se c'è colisione di chiave non è un errore
-                    ' perché non interessa risalire all'appuntamento di B ma è sufficiente sapere se esiste almeno un meeting omonimo o meno
-                    mapApptBBySubjectStartEnd.Add mapKey, Nothing
-                End If
+                
             End If
         End If
     Next
@@ -227,16 +230,18 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                 skipMeeting = False
                 entryIdAFromProperty = getPropertySourceId(apptA)
                 
-                If apptA.MeetingStatus = olMeetingReceivedAndCanceled Then
-                    ' Salta quelli cancellati
-                    skipMeeting = True
-                    ' Debug.Print "Saltato incontro cancellato:  " & appointmentToString(apptA)
-                ElseIf entryIdAFromProperty <> "" Then
-                    ' Salta quelli che hanno la property SourceID, cioè che sono stati creati da una copia precedente
+                ' Copia anche gli incontri annullati (per questo il check è disabilitato)
+                'If apptA.MeetingStatus = olMeetingReceivedAndCanceled Then
+                '    ' Salta quelli cancellati
+                '    skipMeeting = True
+                '    ' Debug.Print "Saltato incontro cancellato:  " & appointmentToString(apptA)
+                'Else
+                If entryIdAFromProperty <> "" Then
+                    ' Salta quelli che hanno la property SourceID, cioè che sono stati creati da questo script
                     skipMeeting = True
                     'Debug.Print "Saltato incontro già copiato: " & appointmentToString(apptA)
-                ElseIf apptA.AllDayEvent Then
-                    ' Salta quelli a giornata intera perché tipicamente sono appunti o promemoria
+                ElseIf apptA.AllDayEvent And apptA.BusyStatus = olFree Then
+                    ' Salta quelli a giornata intera dove si è liberi perché tipicamente sono appunti o promemoria
                     skipMeeting = True
                     'Debug.Print "Saltato incontro giornaliero: " & appointmentToString(apptA)
                 Else
@@ -265,7 +270,7 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                         Debug.Print "Creato placeholder incontro:  " & appointmentToString(apptB)
                     End If
                     
-                ElseIf apptFound.Start <> apptA.Start Or apptFound.End <> apptA.End Or (Not anonymize And prefix & apptFound.Subject <> apptA.Subject) Then
+                ElseIf apptFound.Start <> apptA.Start Or apptFound.End <> apptA.End Or (Not anonymize And apptFound.Subject <> prefix & apptA.Subject) Then
                     ' Aggiorna l'incontro
                     apptFound.BusyStatus = apptA.BusyStatus
                     apptFound.Start = apptA.Start
@@ -313,7 +318,7 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                     Next
                     If Not found Then
                         ' Elimina solo i placeholder orfani a partire da startDate
-                        ' perché per quelli più vecchi non si può risolvere il corrispondente incontro di A a causa della non corrispondenza dei filtri per data
+                        ' perché per quelli più vecchi non si può sempre risolvere il corrispondente incontro di A a causa della non corrispondenza dei filtri per data
                         ' Con la condizione "apptB.End < endDate" si eliminerebbero i placeholder di incontri successivi alla data fine che potrebbero essere stati creati da altre sincronizzazioni con intervallo di date più ampio, per cui la condizione è omessa.
                         ' Con la condizione "apptB.Start >= startDate + 1" NON si eliminano i placeholder antecedenti alla data inizio che potrebbero essere stati creati da altre sincronizzazioni con intervallo di date più ampio
                         If apptB.Start >= startDate + 1 Then
