@@ -1,27 +1,63 @@
 Private gListSeparator As String
 
+Private Type SyncCalendarsConfiguration
+    accountA As String
+    folderA As String
+    accountB As String
+    folderB As String
+    startDateOffset As Integer
+    endDateOffset As Integer
+    categoriesToIgnore() As Variant
+    categoriesToNotAnonymize() As Variant
+    prefix As String
+    categoryToSet As String
+    anonymize As Boolean
+    anonymousSubject As String
+    dryRun As Boolean
+End Type
+
 Sub SyncCalendars()
     Call SyncCalendarsCustomerToPersonal
     Call SyncCalendarsPersonalToCustomer
 End Sub
 
 Sub SyncCalendarsCustomerToPersonal()
-    Dim categoriesToIgnoreArray(), categoriesToNotAnonymizeArray() As Variant
-    categoriesToIgnoreArray = Array("EXAMPLE1")
-    categoriesToNotAnonymizeArray = Array()
-    Call SyncCalendarsParametric( _
-        "CHANGEME@Customer", "Calendario", _
-        "CHANGEME@Private", "Calendario", _
-        -7, 14, _
-        categoriesToIgnoreArray, _
-        categoriesToNotAnonymizeArray, _
-        "CHANGEME PREFIX: ", _
-        "CHANGEME CategoryToSetInPrivate", _
-        False, _
-        False)
+    Dim conf As SyncCalendarsConfiguration
+    conf.accountA = "CHANGEME@Customer"
+    conf.folderA = "Calendario"
+    conf.accountB = "CHANGEME@Private"
+    conf.folderB = "Calendario"
+    conf.startDateOffset = -7
+    conf.endDateOffset = 14
+    conf.categoriesToIgnore = Array("EXAMPLE1")
+    conf.categoriesToNotAnonymize = Array()
+    conf.prefix = "CHANGEME PREFIX: "
+    conf.categoryToSet = "CHANGEME CategoryToSetInPrivate"
+    conf.anonymize = False
+    conf.anonymousSubject = "Placeholder"
+    conf.dryRun = False
+    
+    Call SyncCalendarsParametric(conf)
 End Sub
 
 Sub SyncCalendarsPersonalToCustomer()
+    Dim conf As SyncCalendarsConfiguration
+    conf.accountA = "CHANGEME@Private"
+    conf.folderA = "Calendario"
+    conf.accountB = "CHANGEME@Customer"
+    conf.folderB = "Calendario"
+    conf.startDateOffset = -7
+    conf.endDateOffset = 14
+    conf.categoriesToIgnore = Array()
+    conf.categoriesToNotAnonymize = Array("EXAMPLE2")
+    conf.prefix = "CHANGEME PREFIX: "
+    conf.categoryToSet = "CHANGEME CategoryToSetInCustomer"
+    conf.anonymize = True
+    conf.anonymousSubject = "Placeholder"
+    conf.dryRun = False
+    
+    Call SyncCalendarsParametric(conf)
+
     Dim categoriesToIgnoreArray(), categoriesToNotAnonymizeArray() As Variant
     categoriesToIgnoreArray = Array()
     categoriesToNotAnonymizeArray = Array("EXAMPLE2")
@@ -37,7 +73,7 @@ Sub SyncCalendarsPersonalToCustomer()
         False)
 End Sub
 
-Function appointmentToString(ByRef appt As Outlook.AppointmentItem) As String
+Private Function appointmentToString(ByRef appt As Outlook.AppointmentItem) As String
     If appt Is Nothing Then
         appointmentToString = "Nothing"
     Else
@@ -45,17 +81,17 @@ Function appointmentToString(ByRef appt As Outlook.AppointmentItem) As String
     End If
 End Function
 
-Sub copyAppointmentA2B(ByRef apptA As Outlook.AppointmentItem, ByRef apptB As Outlook.AppointmentItem, entryIdA As String, anonymize As Boolean, categoryToSet As String, prefix As String, dryRun As Boolean)
+Private Sub copyAppointmentA2B(ByRef apptA As Outlook.AppointmentItem, ByRef apptB As Outlook.AppointmentItem, entryIdA As String, anonymizeMeeting As Boolean, ByRef conf As SyncCalendarsConfiguration)
     ' Popola i campi di B
     apptB.Start = apptA.Start
     apptB.End = apptA.End
     apptB.MeetingStatus = apptA.MeetingStatus
     apptB.BusyStatus = apptA.BusyStatus
-    apptB.Categories = categoryToSet
-    If anonymize Then
-        apptB.Subject = prefix
+    apptB.Categories = conf.categoryToSet
+    If anonymizeMeeting Then
+        apptB.Subject = conf.anonymousSubject
     Else
-        apptB.Subject = apptA.Subject
+        apptB.Subject = conf.prefix & apptA.Subject
         apptB.Body = apptA.Body
         apptB.RequiredAttendees = apptA.RequiredAttendees
         apptB.Location = apptA.Location
@@ -101,12 +137,12 @@ Sub copyAppointmentA2B(ByRef apptA As Outlook.AppointmentItem, ByRef apptB As Ou
     End If
     
     ' Salva
-    If Not dryRun Then
+    If Not conf.dryRun Then
         apptB.Save
     End If
 End Sub
 
-Function getPropertySourceId(ByRef appt As Outlook.AppointmentItem) As String
+Private Function getPropertySourceId(ByRef appt As Outlook.AppointmentItem) As String
     If Not appt Is Nothing Then
         Dim prop As Outlook.UserProperty
         Set prop = appt.UserProperties.Find("SourceID")
@@ -120,7 +156,7 @@ Function getPropertySourceId(ByRef appt As Outlook.AppointmentItem) As String
     End If
 End Function
 
-Sub setPropertySourceId(ByRef appt As Outlook.AppointmentItem, value As String)
+Private Sub setPropertySourceId(ByRef appt As Outlook.AppointmentItem, value As String)
     If Not appt Is Nothing Then
         Dim prop As Outlook.UserProperty
         Set prop = appt.UserProperties.Add("SourceID", olText, True)
@@ -128,7 +164,7 @@ Sub setPropertySourceId(ByRef appt As Outlook.AppointmentItem, value As String)
     End If
 End Sub
 
-Function getAppointmentHomonymousKey(ByRef appt As Outlook.AppointmentItem) As String
+Private Function getAppointmentHomonymousKey(ByRef appt As Outlook.AppointmentItem) As String
     If Not appt Is Nothing Then
         getAppointmentHomonymousKey = appointmentToString(appt) ' appt.Subject & appt.Start & appt.End
     Else
@@ -136,7 +172,8 @@ Function getAppointmentHomonymousKey(ByRef appt As Outlook.AppointmentItem) As S
     End If
 End Function
 
-Function GetSystemListSeparator() As String
+' Questo valore viene usato come separatore per le categorie nel campo Categories di Outlook.AppointmentItem
+Public Function GetSystemListSeparator() As String
     ' Usa il valore già letto se disponibile
     If gListSeparator <> "" Then
         GetSystemListSeparator = gListSeparator
@@ -150,8 +187,7 @@ Function GetSystemListSeparator() As String
     GetSystemListSeparator = gListSeparator
 End Function
 
-
-Function hasCategory(ByVal itemCategories As String, ByRef checkCategories() As Variant) As Boolean
+Private Function hasCategory(ByVal itemCategories As String, ByRef checkCategories() As Variant) As Boolean
     Dim cat1, cat2 As Variant
     Dim itemCategoriesArray() As String
     Dim sep As String
@@ -178,8 +214,7 @@ Function hasCategory(ByVal itemCategories As String, ByRef checkCategories() As 
     hasCategory = False
 End Function
 
-
-Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As String, folderB As String, startDateOffset As Integer, endDateOffset As Integer, ByRef categoriesToIgnoreArray() As Variant, ByRef categoriesToNotAnonymizeArray() As Variant, prefix As String, categoryToSet As String, anonymize As Boolean, dryRun As Boolean)
+Private Sub SyncCalendarsParametric(ByRef conf As SyncCalendarsConfiguration)
     Dim ns As Outlook.NameSpace
     Dim calendarA As Outlook.Folder
     Dim calendarB As Outlook.Folder
@@ -209,12 +244,12 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
     Set ns = Application.GetNamespace("MAPI")
     Set mapApptBBySourceID = CreateObject("Scripting.Dictionary")
     Set mapApptBBySubjectStartEnd = CreateObject("Scripting.Dictionary")
-    Set calendarA = ns.Folders(accountA).Folders(folderA)
-    Set calendarB = ns.Folders(accountB).Folders(folderB)
+    Set calendarA = ns.Folders(conf.accountA).Folders(conf.folderA)
+    Set calendarB = ns.Folders(conf.accountB).Folders(conf.folderB)
 
     ' Intervallo di date da sincronizzare
-    startDate = Date + startDateOffset
-    endDate = Date + endDateOffset
+    startDate = Date + conf.startDateOffset
+    endDate = Date + conf.endDateOffset
     ' I match nel calendario B vengono ricercati solo nell'intervallo check. Per ragioni di performance
     startDateCheck = startDate - 7
     endDateCheck = endDate + 30
@@ -240,7 +275,7 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
 
     ' Logga l'avvio della sincronizzazione
     Debug.Print "Sincronizzazione dal " & startDate & " al " & endDate & " avviata il " & Now
-    Debug.Print "Numero eventi A=" & accountA & "=" & countA & " --> B=" & accountB & "=" & countB
+    Debug.Print "Numero eventi A=" & conf.accountA & "=" & countA & " --> B=" & conf.accountB & "=" & countB
 
     
     ' Indicizzazione appuntamenti di B per SourceID e per chiave di omonimia (Subject/Start/End)
@@ -295,7 +330,7 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                 '    skipMeeting = True
                 '    ' Debug.Print "Saltato incontro cancellato:  " & appointmentToString(apptA)
                 'Else
-                If hasCategory(apptA.Categories, categoriesToIgnoreArray) Then
+                If hasCategory(apptA.Categories, conf.categoriesToIgnore) Then
                     ' Salta quelli che hanno una categoria da ignorare
                     skipMeeting = True
                     Debug.Print "Saltato incontro categoria:   " & appointmentToString(apptA)
@@ -321,29 +356,29 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                     
                 End If
                 
-                anonymizeMeeting = anonymize And Not hasCategory(apptA.Categories, categoriesToNotAnonymizeArray)
+                anonymizeMeeting = conf.anonymize And Not hasCategory(apptA.Categories, conf.categoriesToNotAnonymize)
 
                 If skipMeeting Then
                     ' Salta l'elaborazione
                 ElseIf apptFound Is Nothing Then
                     ' Crea un nuovo incontro
                     Set apptB = calendarB.Items.Add(olAppointmentItem)
-                    Call copyAppointmentA2B(apptA, apptB, entryIdA, anonymizeMeeting, categoryToSet, prefix, dryRun)
+                    Call copyAppointmentA2B(apptA, apptB, entryIdA, anonymizeMeeting, conf)
                     If anonymizeMeeting Then
                         Debug.Print "Creato placeholder anonimo:   " & appointmentToString(apptB) & " - per: " & apptA.Subject
                     Else
                         Debug.Print "Creato placeholder incontro:  " & appointmentToString(apptB)
                     End If
                     
-                ElseIf apptFound.Start <> apptA.Start Or apptFound.End <> apptA.End Or (Not anonymize And apptFound.Subject <> prefix & apptA.Subject) Then
+                ElseIf apptFound.Start <> apptA.Start Or apptFound.End <> apptA.End Or (Not anonymizeMeeting And apptFound.Subject <> conf.prefix & apptA.Subject) Then
                     ' Aggiorna l'incontro
                     apptFound.BusyStatus = apptA.BusyStatus
                     apptFound.Start = apptA.Start
                     apptFound.End = apptA.End
                     If Not anonymizeMeeting Then
-                        apptFound.Subject = prefix & apptA.Subject
+                        apptFound.Subject = conf.prefix & apptA.Subject
                     End If
-                    If Not dryRun Then
+                    If Not conf.dryRun Then
                         apptFound.Save
                     End If
                     Debug.Print "Aggiornato placeholder:       " & appointmentToString(apptA)
@@ -352,7 +387,7 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                     If apptFound.BusyStatus <> apptA.BusyStatus Then
                         ' Aggiorna solo lo stato
                         apptFound.BusyStatus = apptA.BusyStatus
-                        If Not dryRun Then
+                        If Not conf.dryRun Then
                             apptFound.Save
                         End If
                         Debug.Print "Aggiornato stato placeholder: " & appointmentToString(apptA)
@@ -388,7 +423,7 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                         ' Con la condizione "apptB.Start >= startDate + 1" NON si eliminano i placeholder antecedenti alla data inizio che potrebbero essere stati creati da altre sincronizzazioni con intervallo di date più ampio
                         If apptB.Start >= startDate + 1 Then
                             Debug.Print "Eliminato placeholder orfano: " & appointmentToString(apptB)
-                            If Not dryRun Then
+                            If Not conf.dryRun Then
                                 apptB.Delete
                             End If
                         End If
