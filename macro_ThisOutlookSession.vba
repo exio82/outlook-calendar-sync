@@ -1,13 +1,20 @@
+Private gListSeparator As String
+
 Sub SyncCalendars()
     Call SyncCalendarsCustomerToPersonal
     Call SyncCalendarsPersonalToCustomer
 End Sub
 
 Sub SyncCalendarsCustomerToPersonal()
+    Dim categoriesToIgnoreArray(), categoriesToNotAnonymizeArray() As Variant
+    categoriesToIgnoreArray = Array("EXAMPLE1")
+    categoriesToNotAnonymizeArray = Array()
     Call SyncCalendarsParametric( _
         "CHANGEME@Customer", "Calendario", _
         "CHANGEME@Private", "Calendario", _
-        -7, 7, _
+        -7, 14, _
+        categoriesToIgnoreArray, _
+        categoriesToNotAnonymizeArray, _
         "CHANGEME PREFIX: ", _
         "CHANGEME CategoryToSetInPrivate", _
         False, _
@@ -15,10 +22,15 @@ Sub SyncCalendarsCustomerToPersonal()
 End Sub
 
 Sub SyncCalendarsPersonalToCustomer()
+    Dim categoriesToIgnoreArray(), categoriesToNotAnonymizeArray() As Variant
+    categoriesToIgnoreArray = Array()
+    categoriesToNotAnonymizeArray = Array("EXAMPLE2")
     Call SyncCalendarsParametric( _
         "CHANGEME@Private", "Calendario", _
         "CHANGEME@Customer", "Calendario", _
-        -7, 7, _
+        -7, 14, _
+        categoriesToIgnoreArray, _
+        categoriesToNotAnonymizeArray, _
         "Placeholder", _
         "CHANGEME CategoryToSetInCustomer", _
         True, _
@@ -43,7 +55,7 @@ Sub copyAppointmentA2B(ByRef apptA As Outlook.AppointmentItem, ByRef apptB As Ou
     If anonymize Then
         apptB.Subject = prefix
     Else
-        apptB.Subject = prefix & apptA.Subject
+        apptB.Subject = apptA.Subject
         apptB.Body = apptA.Body
         apptB.RequiredAttendees = apptA.RequiredAttendees
         apptB.Location = apptA.Location
@@ -124,7 +136,50 @@ Function getAppointmentHomonymousKey(ByRef appt As Outlook.AppointmentItem) As S
     End If
 End Function
 
-Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As String, folderB As String, startDateOffset As Integer, endDateOffset As Integer, prefix As String, categoryToSet As String, anonymize As Boolean, dryRun As Boolean)
+Function GetSystemListSeparator() As String
+    ' Usa il valore già letto se disponibile
+    If gListSeparator <> "" Then
+        GetSystemListSeparator = gListSeparator
+        Exit Function
+    End If
+
+    ' Altrimenti legge dal registro e lo memorizza
+    Dim wshShell As Object
+    Set wshShell = CreateObject("WScript.Shell")
+    gListSeparator = wshShell.RegRead("HKEY_CURRENT_USER\Control Panel\International\sList")
+    GetSystemListSeparator = gListSeparator
+End Function
+
+
+Function hasCategory(ByVal itemCategories As String, ByRef checkCategories() As Variant) As Boolean
+    Dim cat1, cat2 As Variant
+    Dim itemCategoriesArray() As String
+    Dim sep As String
+
+    sep = GetSystemListSeparator()
+    If Trim(itemCategories) = "" Or UBound(checkCategories) = -1 Then
+        hasCategory = False
+        Exit Function
+    End If
+
+    ' Divide le categorie dell'item usando il separatore
+    itemCategoriesArray = Split(itemCategories, sep)
+
+    ' Confronta ogni categoria dell'item con quelle da verificare
+    For Each cat1 In itemCategoriesArray
+        For Each cat2 In checkCategories
+            If cat1 = cat2 Then
+                hasCategory = True
+                Exit Function
+            End If
+        Next cat2
+    Next cat1
+
+    hasCategory = False
+End Function
+
+
+Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As String, folderB As String, startDateOffset As Integer, endDateOffset As Integer, ByRef categoriesToIgnoreArray() As Variant, ByRef categoriesToNotAnonymizeArray() As Variant, prefix As String, categoryToSet As String, anonymize As Boolean, dryRun As Boolean)
     Dim ns As Outlook.NameSpace
     Dim calendarA As Outlook.Folder
     Dim calendarB As Outlook.Folder
@@ -143,7 +198,7 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
     Dim entryIdA As String
     Dim entryIdAFromProperty As String
     Dim entryIdB As String
-    Dim skipMeeting As Boolean
+    Dim skipMeeting, anonymizeMeeting As Boolean
     Dim countA, countB As Integer: countA = countB = 0
     Dim mapApptBBySourceID As Object
     Dim mapApptBBySubjectStartEnd As Object
@@ -186,6 +241,7 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
     ' Logga l'avvio della sincronizzazione
     Debug.Print "Sincronizzazione dal " & startDate & " al " & endDate & " avviata il " & Now
     Debug.Print "Numero eventi A=" & accountA & "=" & countA & " --> B=" & accountB & "=" & countB
+
     
     ' Indicizzazione appuntamenti di B per SourceID e per chiave di omonimia (Subject/Start/End)
     ' Con l'indicizzazione si riducono notevolmente i tempi di esecuzione perché gli eventi del calendario B vengono iterati una sola volta
@@ -209,7 +265,7 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                         mapApptBBySubjectStartEnd.Add mapKey, Nothing
                     End If
                 End If
-                
+
             End If
         End If
     Next
@@ -230,13 +286,20 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                 skipMeeting = False
                 entryIdAFromProperty = getPropertySourceId(apptA)
                 
+                ' log
+                'Debug.Print "Processo incontro:            " & appointmentToString(apptA)
+                
                 ' Copia anche gli incontri annullati (per questo il check è disabilitato)
                 'If apptA.MeetingStatus = olMeetingReceivedAndCanceled Then
                 '    ' Salta quelli cancellati
                 '    skipMeeting = True
                 '    ' Debug.Print "Saltato incontro cancellato:  " & appointmentToString(apptA)
                 'Else
-                If entryIdAFromProperty <> "" Then
+                If hasCategory(apptA.Categories, categoriesToIgnoreArray) Then
+                    ' Salta quelli che hanno una categoria da ignorare
+                    skipMeeting = True
+                    Debug.Print "Saltato incontro categoria:   " & appointmentToString(apptA)
+                ElseIf entryIdAFromProperty <> "" Then
                     ' Salta quelli che hanno la property SourceID, cioè che sono stati creati da questo script
                     skipMeeting = True
                     'Debug.Print "Saltato incontro già copiato: " & appointmentToString(apptA)
@@ -257,14 +320,16 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                     End If
                     
                 End If
+                
+                anonymizeMeeting = anonymize And Not hasCategory(apptA.Categories, categoriesToNotAnonymizeArray)
 
                 If skipMeeting Then
                     ' Salta l'elaborazione
                 ElseIf apptFound Is Nothing Then
                     ' Crea un nuovo incontro
                     Set apptB = calendarB.Items.Add(olAppointmentItem)
-                    Call copyAppointmentA2B(apptA, apptB, entryIdA, anonymize, categoryToSet, prefix, dryRun)
-                    If anonymize Then
+                    Call copyAppointmentA2B(apptA, apptB, entryIdA, anonymizeMeeting, categoryToSet, prefix, dryRun)
+                    If anonymizeMeeting Then
                         Debug.Print "Creato placeholder anonimo:   " & appointmentToString(apptB) & " - per: " & apptA.Subject
                     Else
                         Debug.Print "Creato placeholder incontro:  " & appointmentToString(apptB)
@@ -275,7 +340,7 @@ Sub SyncCalendarsParametric(accountA As String, folderA As String, accountB As S
                     apptFound.BusyStatus = apptA.BusyStatus
                     apptFound.Start = apptA.Start
                     apptFound.End = apptA.End
-                    If Not anonymize Then
+                    If Not anonymizeMeeting Then
                         apptFound.Subject = prefix & apptA.Subject
                     End If
                     If Not dryRun Then
