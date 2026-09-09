@@ -17,22 +17,22 @@ Private Type SyncCalendarsConfiguration
 End Type
 
 Sub SyncCalendars()
-    Call SyncCalendarsCustomerToPersonal
-    Call SyncCalendarsPersonalToCustomer
+    Call SyncCalendars2To1
+    Call SyncCalendars1To2
 End Sub
 
-Sub SyncCalendarsCustomerToPersonal()
+Sub SyncCalendars2To1()
     Dim conf As SyncCalendarsConfiguration
-    conf.accountA = "CHANGEME@Customer"
+    conf.accountA = "CHANGEME@2"
     conf.folderA = "Calendario"
-    conf.accountB = "CHANGEME@Private"
+    conf.accountB = "CHANGEME@1"
     conf.folderB = "Calendario"
     conf.startDateOffset = -7
     conf.endDateOffset = 14
     conf.categoriesToIgnore = Array("EXAMPLE1")
     conf.categoriesToNotAnonymize = Array()
     conf.prefix = "CHANGEME PREFIX: "
-    conf.categoryToSet = "CHANGEME CategoryToSetInPrivate"
+    conf.categoryToSet = "CHANGEME CategoryToSetIn1"
     conf.anonymize = False
     conf.anonymousSubject = "Placeholder"
     conf.dryRun = False
@@ -40,37 +40,23 @@ Sub SyncCalendarsCustomerToPersonal()
     Call SyncCalendarsParametric(conf)
 End Sub
 
-Sub SyncCalendarsPersonalToCustomer()
+Sub SyncCalendars1To2()
     Dim conf As SyncCalendarsConfiguration
-    conf.accountA = "CHANGEME@Private"
+    conf.accountA = "CHANGEME@1"
     conf.folderA = "Calendario"
-    conf.accountB = "CHANGEME@Customer"
+    conf.accountB = "CHANGEME@2"
     conf.folderB = "Calendario"
     conf.startDateOffset = -7
     conf.endDateOffset = 14
     conf.categoriesToIgnore = Array()
     conf.categoriesToNotAnonymize = Array("EXAMPLE2")
     conf.prefix = "CHANGEME PREFIX: "
-    conf.categoryToSet = "CHANGEME CategoryToSetInCustomer"
+    conf.categoryToSet = "CHANGEME CategoryToSetIn2"
     conf.anonymize = True
     conf.anonymousSubject = "Placeholder"
     conf.dryRun = False
     
     Call SyncCalendarsParametric(conf)
-
-    Dim categoriesToIgnoreArray(), categoriesToNotAnonymizeArray() As Variant
-    categoriesToIgnoreArray = Array()
-    categoriesToNotAnonymizeArray = Array("EXAMPLE2")
-    Call SyncCalendarsParametric( _
-        "CHANGEME@Private", "Calendario", _
-        "CHANGEME@Customer", "Calendario", _
-        -7, 14, _
-        categoriesToIgnoreArray, _
-        categoriesToNotAnonymizeArray, _
-        "Placeholder", _
-        "CHANGEME CategoryToSetInCustomer", _
-        True, _
-        False)
 End Sub
 
 Private Function appointmentToString(ByRef appt As Outlook.AppointmentItem) As String
